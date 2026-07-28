@@ -2,10 +2,96 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+	findRouteToRewrite,
 	normalizeRewritePathname,
 	setOriginPathname,
 	getOriginPathname,
 } from '../../../dist/core/routing/rewrite.js';
+import { PrerenderPathLookup } from '../../../dist/core/routing/prerender-path-lookup.js';
+import type { RouteData } from '../../../dist/types/public/internal.js';
+import { dynamicPart, makeRoute, spreadPart, staticPart } from './test-helpers.ts';
+
+function findRewriteRoute(
+	pathname: string,
+	routes: RouteData[],
+	prerenderPathLookup: PrerenderPathLookup | undefined,
+): RouteData {
+	return findRouteToRewrite({
+		payload: pathname,
+		routes,
+		request: new Request('http://example.com/'),
+		trailingSlash: 'ignore',
+		buildFormat: 'directory',
+		base: '/',
+		outDir: new URL('file:///dist/'),
+		prerenderPathLookup,
+	}).routeData;
+}
+
+describe('findRouteToRewrite', () => {
+	it('uses complete static paths instead of partial distURL output', () => {
+		const catchAll = makeRoute({
+			route: '/[...slug]',
+			component: 'src/pages/[...slug].astro',
+			segments: [[spreadPart('slug')]],
+			trailingSlash: 'ignore',
+			pathname: undefined,
+			prerender: true,
+		});
+		catchAll.distURL.push(new URL('file:///dist/articles/slow-page/index.html'));
+		const article = makeRoute({
+			route: '/articles/[slug]',
+			component: 'src/pages/articles/[slug].astro',
+			segments: [[staticPart('articles')], [dynamicPart('slug')]],
+			trailingSlash: 'ignore',
+			pathname: undefined,
+			prerender: true,
+		});
+		article.distURL.push(new URL('file:///dist/articles/other/index.html'));
+		const lookup = new PrerenderPathLookup(
+			[catchAll, article],
+			[{ pathname: '/articles/slow-page', route: article }],
+		);
+
+		assert.equal(findRewriteRoute('/articles/slow-page', [catchAll, article], lookup), article);
+	});
+
+	it('retains distURL matching when no lookup exists', () => {
+		const article = makeRoute({
+			route: '/articles/[slug]',
+			component: 'src/pages/articles/[slug].astro',
+			segments: [[staticPart('articles')], [dynamicPart('slug')]],
+			trailingSlash: 'ignore',
+			pathname: undefined,
+			prerender: true,
+		});
+		article.distURL.push(new URL('file:///dist/articles/other/index.html'));
+
+		assert.notEqual(findRewriteRoute('/articles/slow-page', [article], undefined), article);
+	});
+
+	it('keeps non-prerendered dynamic routes eligible when their paths are unknown', () => {
+		const indexedRoute = makeRoute({
+			route: '/articles/[slug]',
+			component: 'src/pages/articles/[slug].astro',
+			segments: [[staticPart('articles')], [dynamicPart('slug')]],
+			trailingSlash: 'ignore',
+			pathname: undefined,
+			prerender: true,
+		});
+		const serverRoute = makeRoute({
+			route: '/[...slug]',
+			component: 'src/pages/[...slug].astro',
+			segments: [[spreadPart('slug')]],
+			trailingSlash: 'ignore',
+			pathname: undefined,
+			prerender: false,
+		});
+		const lookup = new PrerenderPathLookup([indexedRoute], []);
+
+		assert.equal(findRewriteRoute('/server-only', [serverRoute], lookup), serverRoute);
+	});
+});
 
 describe('normalizeRewritePathname', () => {
 	describe('no base path', () => {

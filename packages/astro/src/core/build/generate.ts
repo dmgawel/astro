@@ -29,6 +29,7 @@ import { createRequest } from '../request.js';
 import { redirectTemplate } from '../routing/3xx.js';
 import { routeIsRedirect } from '../routing/helpers.js';
 import { matchRoute } from '../routing/match.js';
+import { PrerenderPathLookup } from '../routing/prerender-path-lookup.js';
 import { getOutputFilename } from '../output-filename.js';
 import { getOutFile, getOutFolder } from './common.js';
 import { createDefaultPrerenderer, type DefaultPrerenderer } from './default-prerenderer.js';
@@ -93,6 +94,11 @@ export async function generatePages(
 	try {
 		// Get all static paths with their routes from the prerenderer
 		const pathsWithRoutes = await prerenderer.getStaticPaths();
+		const dynamicRoutes = new Set<RouteData>();
+		for (const { route } of pathsWithRoutes) {
+			if (route.params.length > 0) dynamicRoutes.add(route);
+		}
+		const prerenderPathLookup = new PrerenderPathLookup(dynamicRoutes, pathsWithRoutes);
 
 		// Check if i18n domains are configured (incompatible with prerendering)
 		const hasI18nDomains =
@@ -174,6 +180,7 @@ export async function generatePages(
 								options,
 								routeToHeaders,
 								logger,
+								prerenderPathLookup,
 							),
 						),
 					);
@@ -189,6 +196,7 @@ export async function generatePages(
 					options,
 					routeToHeaders,
 					logger,
+					prerenderPathLookup,
 				);
 			}
 		}
@@ -353,6 +361,7 @@ interface RenderToPathPayload {
 	options: StaticBuildOptions;
 	routeToHeaders?: RouteToHeaders;
 	logger: AstroLogger;
+	prerenderPathLookup?: PrerenderPathLookup;
 }
 
 /**
@@ -386,6 +395,7 @@ export async function renderPath({
 	options,
 	routeToHeaders = new Map(),
 	logger,
+	prerenderPathLookup,
 }: RenderToPathPayload): Promise<RenderPathResult | null> {
 	const { config } = options.settings;
 
@@ -397,8 +407,12 @@ export async function renderPath({
 				if (routeData.pattern.test(pathname)) {
 					// Check if we've matched a dynamic route
 					if (routeData.params && routeData.params.length !== 0) {
-						// Make sure the pathname matches an entry in distURL
+						const staticPathMatch = prerenderPathLookup?.has(routeData, pathname);
+						if (staticPathMatch === false) return false;
+
+						// Concurrent renders make distURL incomplete until generation finishes.
 						if (
+							staticPathMatch === undefined &&
 							routeData.distURL &&
 							!routeData.distURL.find(
 								(url) =>
@@ -516,6 +530,7 @@ async function generatePathWithPrerenderer(
 	options: StaticBuildOptions,
 	routeToHeaders: RouteToHeaders,
 	logger: AstroLogger,
+	prerenderPathLookup: PrerenderPathLookup,
 ): Promise<void> {
 	const timeStart = performance.now();
 	const { config } = options.settings;
@@ -535,6 +550,7 @@ async function generatePathWithPrerenderer(
 		options,
 		routeToHeaders,
 		logger,
+		prerenderPathLookup,
 	});
 
 	if (!result) {

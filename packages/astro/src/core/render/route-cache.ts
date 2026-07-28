@@ -11,6 +11,7 @@ import type { RouteData } from '../../types/public/internal.js';
 import type { AstroLogger } from '../logger/core.js';
 
 import { stringifyParams } from '../routing/params.js';
+import type { PrerenderPathLookup } from '../routing/prerender-path-lookup.js';
 import { validateDynamicRouteModule, validateGetStaticPathsResult } from '../routing/validation.js';
 import { generatePaginateFunction } from './paginate.js';
 
@@ -102,6 +103,7 @@ interface RouteCacheEntry {
 export class RouteCache {
 	private logger: AstroLogger;
 	private cache: Record<string, RouteCacheEntry> = {};
+	#prerenderPathLookup: PrerenderPathLookup | undefined;
 	private runtimeMode: RuntimeMode;
 
 	constructor(logger: AstroLogger, runtimeMode: RuntimeMode = 'production') {
@@ -112,6 +114,15 @@ export class RouteCache {
 	/** Clear the cache. */
 	clearAll() {
 		this.cache = {};
+		this.#prerenderPathLookup = undefined;
+	}
+
+	setPrerenderPathLookup(lookup: PrerenderPathLookup): void {
+		this.#prerenderPathLookup = lookup;
+	}
+
+	getPrerenderPathLookup(): PrerenderPathLookup | undefined {
+		return this.#prerenderPathLookup;
 	}
 
 	set(route: RouteData, entry: RouteCacheEntry): void {

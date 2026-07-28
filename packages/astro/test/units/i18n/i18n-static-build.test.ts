@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { before, describe, it } from 'node:test';
 import type { StaticBuildOptions } from '../../../dist/core/build/types.js';
 import { renderPath } from '../../../dist/core/build/generate.js';
+import { PrerenderPathLookup } from '../../../dist/core/routing/prerender-path-lookup.js';
 import { createMockPrerenderer, createStaticBuildOptions } from '../build/test-helpers.ts';
 import { createMockAstroSource, createRouteData } from '../mocks.ts';
+import { dynamicPart, makeRoute, staticPart } from '../routing/test-helpers.ts';
 
 // Page sources — mirrors the structure of the deleted fixture.
 // createStaticBuildOptions writes these into a temp directory and derives
@@ -122,5 +124,84 @@ describe('i18n double-prefix prevention', () => {
 			false,
 			'Double-prefixed path /es/es/test/item2/index.html should not exist',
 		);
+	});
+});
+
+describe('i18n dynamic fallback suppression', () => {
+	function createTranslatedRoute() {
+		return makeRoute({
+			route: '/es/articles/[slug]',
+			component: 'src/pages/es/articles/[slug].astro',
+			segments: [[staticPart('es')], [staticPart('articles')], [dynamicPart('slug')]],
+			trailingSlash: 'ignore',
+			pathname: undefined,
+			prerender: true,
+		});
+	}
+
+	it('suppresses an existing translated path before any route renders', async () => {
+		const translatedRoute = createTranslatedRoute();
+		const clonedRoute = { ...translatedRoute };
+		const lookup = new PrerenderPathLookup(
+			[clonedRoute],
+			[{ pathname: '/es/articles/slow-page', route: clonedRoute }],
+		);
+		const options = await createStaticBuildOptions();
+		options.routesList.routes = [translatedRoute];
+		const fallbackRoute = createRouteData({
+			route: '/es/articles/slow-page',
+			type: 'fallback',
+		});
+		let renderCount = 0;
+		const dynamicPrerenderer = createMockPrerenderer({
+			'/es/articles/slow-page': '<html>fallback</html>',
+		});
+		const originalRender = dynamicPrerenderer.render;
+		dynamicPrerenderer.render = async (...args) => {
+			renderCount++;
+			return originalRender(...args);
+		};
+
+		const result = await renderPath({
+			prerenderer: dynamicPrerenderer,
+			pathname: '/es/articles/slow-page',
+			route: fallbackRoute,
+			options,
+			logger: options.logger,
+			prerenderPathLookup: lookup,
+		});
+
+		assert.equal(result, null);
+		assert.equal(renderCount, 0);
+		assert.deepEqual(translatedRoute.distURL, []);
+	});
+
+	it('renders a fallback when the translated dynamic route did not declare the path', async () => {
+		const translatedRoute = createTranslatedRoute();
+		const lookup = new PrerenderPathLookup(
+			[translatedRoute],
+			[{ pathname: '/es/articles/existing', route: translatedRoute }],
+		);
+		const options = await createStaticBuildOptions();
+		options.routesList.routes = [translatedRoute];
+		const fallbackRoute = createRouteData({
+			route: '/es/articles/missing',
+			type: 'fallback',
+		});
+		const dynamicPrerenderer = createMockPrerenderer({
+			'/es/articles/missing': '<html>fallback</html>',
+		});
+
+		const result = await renderPath({
+			prerenderer: dynamicPrerenderer,
+			pathname: '/es/articles/missing',
+			route: fallbackRoute,
+			options,
+			logger: options.logger,
+			prerenderPathLookup: lookup,
+		});
+
+		assert.ok(result);
+		assert.deepEqual(translatedRoute.distURL, []);
 	});
 });

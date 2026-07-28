@@ -1,7 +1,10 @@
 import * as assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { RouteCache } from '../../../dist/core/render/route-cache.js';
 import { StaticPaths } from '../../../dist/runtime/prerender/static-paths.js';
 import type { StaticPathsApp } from '../../../dist/runtime/prerender/static-paths.js';
+import type { RouteData } from '../../../dist/types/public/internal.js';
+import { defaultLogger } from '../test-utils.ts';
 
 interface MockRouteData {
 	route: string;
@@ -13,7 +16,7 @@ interface MockRouteData {
 	component: string;
 	generate: (data: { route: string }) => string;
 	segments: Array<Array<{ content: string; dynamic: boolean; spread: boolean }>>;
-	fallbackRoutes: unknown[];
+	fallbackRoutes: MockRouteData[];
 	isIndex: boolean;
 	mockGetStaticPaths?: () => Array<{ params: Record<string, string> }>;
 }
@@ -23,12 +26,12 @@ interface MockRouteData {
  */
 function createMockApp({
 	routes,
-	routeCache = new Map(),
+	routeCache = new RouteCache(defaultLogger),
 	i18n = undefined,
 }: {
 	routes: Array<{ routeData: MockRouteData }>;
-	routeCache?: Map<unknown, unknown>;
-	i18n?: undefined;
+	routeCache?: RouteCache;
+	i18n?: { fallback: Record<string, string> };
 }): StaticPathsApp {
 	return {
 		manifest: {
@@ -41,10 +44,14 @@ function createMockApp({
 		pipeline: {
 			routeCache,
 			async getComponentByRoute(route: MockRouteData) {
+				const sourceRoute =
+					route.type === 'fallback'
+						? routes.find(({ routeData }) => routeData.fallbackRoutes.includes(route))?.routeData
+						: route;
 				// Return a mock component with getStaticPaths if route is dynamic
-				if (!route.pathname) {
+				if (!sourceRoute?.pathname) {
 					return {
-						getStaticPaths: route.mockGetStaticPaths || (() => []),
+						getStaticPaths: sourceRoute?.mockGetStaticPaths || (() => []),
 					};
 				}
 				return {};
@@ -138,11 +145,88 @@ describe('StaticPaths', () => {
 
 			const app = createMockApp({ routes });
 			const staticPaths = new StaticPaths(app);
+			assert.equal(app.pipeline.routeCache.getPrerenderPathLookup(), undefined);
 			const paths = await staticPaths.getAll();
+			const lookup = app.pipeline.routeCache.getPrerenderPathLookup();
 
 			assert.equal(paths.length, 2);
 			assert.equal(paths[0].pathname, '/blog/post-1');
 			assert.equal(paths[1].pathname, '/blog/post-2');
+			assert.equal(lookup?.has(routes[0].routeData as unknown as RouteData, '/blog/post-1'), true);
+			assert.equal(
+				lookup?.has(routes[0].routeData as unknown as RouteData, '/blog/missing'),
+				false,
+			);
+		});
+
+		it('should index dynamic routes with no static paths', async () => {
+			const routes = [
+				createMockRoute({
+					pathname: undefined,
+					route: '/blog/[slug]',
+					mockGetStaticPaths: () => [],
+				}),
+			];
+			const app = createMockApp({ routes });
+
+			await new StaticPaths(app).getAll();
+
+			assert.equal(
+				app.pipeline.routeCache
+					.getPrerenderPathLookup()
+					?.has(routes[0].routeData as unknown as RouteData, '/blog/missing'),
+				false,
+			);
+		});
+
+		it('should install the lookup only after successful enumeration', async () => {
+			const routes = [
+				createMockRoute({
+					pathname: undefined,
+					route: '/blog/[slug]',
+					mockGetStaticPaths: () => [{ params: { slug: 'post' } }],
+				}),
+				createMockRoute({
+					pathname: undefined,
+					route: '/products/[slug]',
+					mockGetStaticPaths: () => {
+						throw new Error('enumeration failed');
+					},
+				}),
+			];
+			const app = createMockApp({ routes });
+
+			await assert.rejects(() => new StaticPaths(app).getAll(), /enumeration failed/);
+
+			assert.equal(app.pipeline.routeCache.getPrerenderPathLookup(), undefined);
+		});
+
+		it('should index localized fallback paths and clear them with the route cache', async () => {
+			const originalRoute = createMockRoute({
+				pathname: undefined,
+				route: '/[slug]',
+				mockGetStaticPaths: () => [{ params: { slug: 'article' } }],
+			});
+			const fallbackRoute = createMockRoute({
+				pathname: undefined,
+				route: '/es/[slug]',
+			});
+			fallbackRoute.routeData.type = 'fallback';
+			originalRoute.routeData.fallbackRoutes.push(fallbackRoute.routeData);
+			const app = createMockApp({
+				routes: [originalRoute],
+				i18n: { fallback: { es: 'en' } },
+			});
+
+			await new StaticPaths(app).getAll();
+			const lookup = app.pipeline.routeCache.getPrerenderPathLookup();
+
+			assert.equal(
+				lookup?.has(fallbackRoute.routeData as unknown as RouteData, '/es/article'),
+				true,
+			);
+			app.pipeline.routeCache.clearAll();
+			assert.equal(app.pipeline.routeCache.getPrerenderPathLookup(), undefined);
 		});
 
 		it('should skip non-prerendered routes', async () => {

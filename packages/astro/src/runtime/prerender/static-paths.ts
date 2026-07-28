@@ -4,6 +4,7 @@ import type { PathWithRoute } from '../../types/public/integrations.js';
 import type { RouteData } from '../../types/public/internal.js';
 import { stringifyParams } from '../../core/routing/params.js';
 import { getFallbackRoute, routeIsFallback, routeIsRedirect } from '../../core/routing/helpers.js';
+import { PrerenderPathLookup } from '../../core/routing/prerender-path-lookup.js';
 import { callGetStaticPaths } from '../../core/render/route-cache.js';
 
 export type { PathWithRoute } from '../../types/public/integrations.js';
@@ -34,6 +35,7 @@ export class StaticPaths {
 	 */
 	async getAll(): Promise<PathWithRoute[]> {
 		const allPaths: PathWithRoute[] = [];
+		const dynamicRoutes: RouteData[] = [];
 		const manifest = this.#app.manifest;
 
 		// Collect routes to generate (mirrors retrieveRoutesToGenerate)
@@ -62,6 +64,9 @@ export class StaticPaths {
 		for (const route of routesToGenerate) {
 			// Also process fallback routes
 			for (const currentRoute of eachRouteInRouteData(route)) {
+				if (currentRoute.params.length > 0) {
+					dynamicRoutes.push(currentRoute);
+				}
 				const paths = await this.#getPathsForRoute(currentRoute);
 				// Use a loop instead of spread operator (allPaths.push(...paths)) to avoid
 				// "Maximum call stack size exceeded" error with large arrays (issue #15578).
@@ -73,6 +78,9 @@ export class StaticPaths {
 			}
 		}
 
+		this.#app.pipeline.routeCache.setPrerenderPathLookup(
+			new PrerenderPathLookup(dynamicRoutes, allPaths),
+		);
 		return allPaths;
 	}
 

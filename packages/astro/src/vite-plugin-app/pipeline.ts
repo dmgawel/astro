@@ -245,6 +245,7 @@ export class RunnablePipeline extends Pipeline {
 			buildFormat: this.manifest.buildFormat,
 			base: this.manifest.base,
 			outDir: this.manifest.outDir,
+			prerenderPathLookup: this.routeCache.getPrerenderPathLookup(),
 		});
 
 		const componentInstance = await this.getComponentByRoute(routeData);

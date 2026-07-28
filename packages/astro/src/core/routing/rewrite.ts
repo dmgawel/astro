@@ -17,6 +17,7 @@ import { createRequest } from '../request.js';
 import { validateAndDecodePathname } from '../util/pathname.js';
 import { DEFAULT_404_ROUTE } from './internal/astro-designed-error-pages.js';
 import { isRoute404, isRoute500 } from './internal/route-errors.js';
+import type { PrerenderPathLookup } from './prerender-path-lookup.js';
 
 type FindRouteToRewrite = {
 	payload: RewritePayload;
@@ -26,6 +27,7 @@ type FindRouteToRewrite = {
 	buildFormat: AstroConfig['build']['format'];
 	base: AstroConfig['base'];
 	outDir: URL | string;
+	prerenderPathLookup?: PrerenderPathLookup;
 };
 
 interface FindRouteToRewriteResult {
@@ -47,6 +49,7 @@ export function findRouteToRewrite({
 	buildFormat,
 	base,
 	outDir,
+	prerenderPathLookup,
 }: FindRouteToRewrite): FindRouteToRewriteResult {
 	let newUrl: URL | undefined = undefined;
 	if (payload instanceof URL) {
@@ -93,23 +96,23 @@ export function findRouteToRewrite({
 		if (route.pattern.test(decodedPathname)) {
 			// If it's a dynamic route, make sure it actually generates the pathname
 			// Checking for params to make sure it's a dynamic route
-			if (
-				route.params &&
-				route.params.length !== 0 &&
-				route.distURL &&
-				route.distURL.length !== 0
-			) {
-				// Remove outDir from beginning of distURL
-				// Remove /index.html or .html from end of distURL and compare with pathname
-				// Use pathname (encoded) instead of decodedPathname because url.href is encoded
-				if (
-					!route.distURL.find(
-						(url) =>
-							url.href.replace(outDir.toString(), '').replace(/(?:\/index\.html|\.html)$/, '') ===
-							trimSlashes(pathname),
-					)
-				) {
-					continue;
+			if (route.params && route.params.length !== 0) {
+				const staticPathMatch = prerenderPathLookup?.has(route, pathname);
+				if (staticPathMatch === false) continue;
+
+				if (staticPathMatch === undefined && route.distURL && route.distURL.length !== 0) {
+					// Remove outDir from beginning of distURL
+					// Remove /index.html or .html from end of distURL and compare with pathname
+					// Use pathname (encoded) instead of decodedPathname because url.href is encoded
+					if (
+						!route.distURL.find(
+							(url) =>
+								url.href.replace(outDir.toString(), '').replace(/(?:\/index\.html|\.html)$/, '') ===
+								trimSlashes(pathname),
+						)
+					) {
+						continue;
+					}
 				}
 			}
 			foundRoute = route;

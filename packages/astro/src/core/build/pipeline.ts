@@ -249,6 +249,7 @@ export class BuildPipeline extends Pipeline {
 			buildFormat: this.manifest.buildFormat,
 			base: this.manifest.base,
 			outDir: this.manifest.serverLike ? this.manifest.buildClientDir : this.manifest.outDir,
+			prerenderPathLookup: this.routeCache.getPrerenderPathLookup(),
 		});
 
 		const componentInstance = await this.getComponentByRoute(routeData);
